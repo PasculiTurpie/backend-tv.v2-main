@@ -44,10 +44,11 @@ app.set("trust proxy", true);
 app.disable("x-powered-by");
 
 const defaultOrigins = [
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "http://localhost:8000",
-  "https://localhost:8000",
+  'https://localhost:5000',
+  'https://signal-operacionestv.grupogtd.com',  
+  'https://172.19.14.135',
+  'http://localhost:3000',
+  'http://localhost:8000'
 ];
 
 const configuredOrigins = (process.env.CORS_ORIGINS || "")
