@@ -7,21 +7,21 @@ const ContactSchema = new mongoose.Schema(
       unique: true,
       required: true,
       set: (v) => (v === "" ? undefined : v),
-      tirm: true,
+      trim: true, // <- corregido (antes tirm)
     },
     email: {
       type: String,
       unique: true,
       sparse: true,
       set: (v) => (v === "" ? undefined : v),
-      tirm: true,
+      trim: true, // <- corregido (antes tirm)
     },
     telefono: {
       type: String,
       unique: true,
       sparse: true,
       set: (v) => (v === "" ? undefined : v),
-      tirm: true,
+      trim: true, // <- corregido (antes tirm)
     },
   },
   { timestamps: true, versionKey: false }
@@ -29,4 +29,3 @@ const ContactSchema = new mongoose.Schema(
 
 const Contact = mongoose.model("Contact", ContactSchema);
 module.exports = Contact;
- 
