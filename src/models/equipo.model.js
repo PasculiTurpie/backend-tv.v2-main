@@ -24,7 +24,7 @@ const SchemaEquipos = new mongoose.Schema(
 
 // Índice parcial: permite varios null, pero impide duplicar IPs reales
 SchemaEquipos.index(
-  { unique: true, partialFilterExpression: { ip_gestion: { $type: "string" } } }
+  { unique: true, partialFilterExpression: { nombre: { $type: "string" } } }
 );
 const Equipo = mongoose.model("Equipo", SchemaEquipos);
 module.exports = Equipo;
