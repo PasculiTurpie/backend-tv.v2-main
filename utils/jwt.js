@@ -34,7 +34,7 @@ function getRefreshSecret() {
 
 function signAccessToken(payload, expiresIn) {
   return jwt.sign(payload, getAccessSecret(), {
-    expiresIn: expiresIn || process.env.JWT_ACCESS_EXPIRES || "10m",
+    expiresIn: expiresIn || process.env.JWT_ACCESS_EXPIRES || "7d",
   });
 }
 
