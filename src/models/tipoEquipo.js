@@ -7,6 +7,7 @@ const SchemaTipoEquipos = new mongoose.Schema(
       required: true,
       unique: true,
       trim: true,
+      lowercase: true,
     },
   },
   { timestamps: true, versionKey: false }
