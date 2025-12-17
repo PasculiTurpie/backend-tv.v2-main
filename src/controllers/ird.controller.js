@@ -72,21 +72,21 @@ module.exports.createIrd = async (req, res) => {
         throw { status: 500, message: "No se pudo crear IRD" };
       }
 
-      // 2) Obtener/crear TipoEquipo "ird" => ObjectId para Equipo.tipoNombre
+      // 2) Obtener/crear TipoEquipo "ird"
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
       if (!tipoIrdId) {
         throw { status: 500, message: "No se pudo resolver/crear el TipoEquipo 'ird'." };
       }
 
-      // 3) Crear Equipo con datos provenientes del IRD (mapeo solicitado)
+      // 3) Crear Equipo NUEVO con mapeo desde IRD y irdRef = IRD._id
       const payloadEquipo = {
-        nombre: String(createdIrd.nombreIrd ?? req.body?.nombreIrd ?? "").trim(),
-        marca: String(createdIrd.marcaIrd ?? req.body?.marcaIrd ?? "").trim(),
-        modelo: String(createdIrd.modelIrd ?? req.body?.modelIrd ?? "").trim(),
-        tipoNombre: tipoIrdId, // ✅ ObjectId de TipoEquipo "ird"
-        ip_gestion: String(createdIrd.ipAdminIrd ?? req.body?.ipAdminIrd ?? "").trim() || null,
+        nombre: String(createdIrd.nombreIrd ?? "").trim(),
+        marca: String(createdIrd.marcaIrd ?? "").trim(),
+        modelo: String(createdIrd.modelIrd ?? "").trim(),
+        tipoNombre: tipoIrdId,
+        ip_gestion: String(createdIrd.ipAdminIrd ?? "").trim() || null,
 
-        // ✅ _id del IRD guardado en irdRef
+        // ✅ referencia al IRD (esto es lo que pides)
         irdRef: createdIrd._id,
       };
 
@@ -94,7 +94,7 @@ module.exports.createIrd = async (req, res) => {
       createdEquipo = equipoDoc;
 
       if (!createdEquipo?._id) {
-        throw { status: 500, message: "No se pudo crear el Equipo asociado" };
+        throw { status: 500, message: "No se pudo crear el Equipo asociado al IRD" };
       }
     });
 
@@ -105,7 +105,7 @@ module.exports.createIrd = async (req, res) => {
       equipo: equipoPopulado || null,
       equipoInfo: {
         created: true,
-        reason: "Equipo asociado creado automáticamente desde datos del IRD.",
+        reason: "Equipo IRD creado automáticamente con irdRef = IRD._id.",
         tipoEquipo: "ird",
       },
     });
@@ -128,6 +128,7 @@ module.exports.createIrd = async (req, res) => {
     session.endSession();
   }
 };
+
 
 
 
