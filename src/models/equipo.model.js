@@ -1,3 +1,4 @@
+// models/equipo.model.js
 const mongoose = require("mongoose");
 
 const SchemaEquipos = new mongoose.Schema(
@@ -5,26 +6,38 @@ const SchemaEquipos = new mongoose.Schema(
     nombre: { type: String, required: true, trim: true },
     marca: { type: String, required: true, trim: true },
     modelo: { type: String, required: true, trim: true },
+
     tipoNombre: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "TipoEquipo",
       required: true,
-      trim: true,
     },
+
     ip_gestion: {
       type: String,
       trim: true,
       default: null,
     },
-    satelliteRef: { type: mongoose.Schema.Types.ObjectId, ref: "Satellite" },
-    irdRef: { type: mongoose.Schema.Types.ObjectId, ref: "Ird" },
+
+    satelliteRef: { type: mongoose.Schema.Types.ObjectId, ref: "Satellite", default: null },
+
+    // ✅ 1 IRD = 1 Equipo (evita duplicados por reintentos)
+    irdRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Ird",
+      unique: true,
+      sparse: true,
+      default: null,
+    },
   },
   { timestamps: true, versionKey: false }
 );
 
-// Índice parcial: permite varios null, pero impide duplicar IPs reales
+// ✅ Evita duplicar IPs reales, permite múltiples null
 SchemaEquipos.index(
-  { unique: true, partialFilterExpression: { nombre: { $type: "string" } } }
+  { ip_gestion: 1 },
+  { unique: true, partialFilterExpression: { ip_gestion: { $type: "string" } } }
 );
+
 const Equipo = mongoose.model("Equipo", SchemaEquipos);
 module.exports = Equipo;
