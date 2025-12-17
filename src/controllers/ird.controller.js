@@ -5,12 +5,12 @@ const Equipo = require("../models/equipo.model");
 const TipoEquipo = require("../models/tipoEquipo");
 
 const normalizeLower = (s) => String(s ?? "").trim().toLowerCase();
+const normalizeStr = (s) => String(s ?? "").trim();
 
 async function getOrCreateTipoEquipoIdByName(name, { session } = {}) {
   const tipoLower = normalizeLower(name);
   if (!tipoLower) return null;
 
-  // 1) buscar por lower (tu enfoque actual)
   const found = await TipoEquipo.findOne({ tipoNombreLower: tipoLower })
     .select("_id")
     .lean()
@@ -18,7 +18,6 @@ async function getOrCreateTipoEquipoIdByName(name, { session } = {}) {
 
   if (found?._id) return found._id;
 
-  // 2) si no existe, crear (lo que necesitas)
   const payload = {
     tipoNombre: String(name).trim(),
     tipoNombreLower: tipoLower,
@@ -62,7 +61,7 @@ module.exports.createIrd = async (req, res) => {
 
   try {
     let createdIrd = null;
-    let upsertedEquipo = null;
+    let createdEquipo = null;
 
     await session.withTransaction(async () => {
       // 1) Crear IRD
@@ -76,49 +75,35 @@ module.exports.createIrd = async (req, res) => {
       // 2) Asegurar TipoEquipo "ird" (buscar o crear)
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
       if (!tipoIrdId) {
-        throw {
-          status: 500,
-          message:
-            "No se pudo resolver/crear el TipoEquipo 'ird'. No se creó el Equipo asociado.",
-        };
+        throw { status: 500, message: "No se pudo resolver/crear el TipoEquipo 'ird'." };
       }
 
-      // 3) Crear o actualizar Equipo asociado (UPsert por ip_gestion)
-      const ipGestion = req.body?.ipAdminIrd?.trim() || null;
-
+      // 3) ✅ Crear SIEMPRE un Equipo NUEVO (NO upsert por ip_gestion)
       const payloadEquipo = {
-        nombre: req.body?.nombreIrd?.trim() || "IRD",
-        marca: req.body?.marcaIrd?.trim() || "IRD",
-        modelo: req.body?.modelIrd?.trim() || "IRD",
+        nombre: normalizeStr(req.body?.nombreIrd) || "IRD",
+        marca: normalizeStr(req.body?.marcaIrd) || "IRD",
+        modelo: normalizeStr(req.body?.modelIrd) || "IRD",
         tipoNombre: tipoIrdId,
-        ip_gestion: ipGestion,
-        irdRef: createdIrd._id,
+        ip_gestion: normalizeStr(req.body?.ipAdminIrd) || null, // puede ser null si lo permites
+        irdRef: createdIrd._id, // ✅ referencia al IRD
       };
 
-      // Si ya existe un equipo con esa IP, lo actualiza y le setea el irdRef.
-      // Si no existe, lo crea.
-      upsertedEquipo = await Equipo.findOneAndUpdate(
-        { ip_gestion: ipGestion },
-        { $set: payloadEquipo },
-        {
-          new: true,
-          upsert: true,
-          session,
-          setDefaultsOnInsert: true,
-        }
-      );
+      const [equipoDoc] = await Equipo.create([payloadEquipo], { session });
+      createdEquipo = equipoDoc;
+
+      if (!createdEquipo?._id) {
+        throw { status: 500, message: "No se pudo crear el Equipo asociado" };
+      }
     });
 
-    const equipoPopulado = await populateEquipoById(upsertedEquipo?._id);
+    const equipoPopulado = await populateEquipoById(createdEquipo?._id);
 
     return res.status(201).json({
       ird: createdIrd,
       equipo: equipoPopulado || null,
       equipoInfo: {
-        created: Boolean(upsertedEquipo?._id),
-        reason: upsertedEquipo?._id
-          ? "Equipo asociado creado/actualizado automáticamente."
-          : "No se pudo crear/actualizar el Equipo asociado.",
+        created: Boolean(createdEquipo?._id),
+        reason: "Equipo asociado creado automáticamente (nuevo _id).",
         tipoEquipo: "ird",
       },
     });
@@ -163,34 +148,49 @@ module.exports.updateIrd = async (req, res) => {
       // 2) asegurar TipoEquipo "ird"
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
       if (!tipoIrdId) {
-        throw {
-          status: 500,
-          message: "No se pudo resolver/crear el TipoEquipo 'ird'.",
-        };
+        throw { status: 500, message: "No se pudo resolver/crear el TipoEquipo 'ird'." };
       }
 
-      // 3) sincronizar Equipo asociado (por irdRef)
-      const ipGestion = (req.body?.ipAdminIrd ?? updatedIrd?.ipAdminIrd ?? null);
+      // 3) ✅ actualizar Equipo por ID si viene (regla que tú quieres)
+      const equipoId = req.body?.equipoId || req.body?.equipoRef || null;
+
       const payloadEquipo = {
-        nombre: (req.body?.nombreIrd ?? updatedIrd?.nombreIrd ?? "IRD").trim?.() ?? "IRD",
-        marca: (req.body?.marcaIrd ?? updatedIrd?.marcaIrd ?? "IRD").trim?.() ?? "IRD",
-        modelo: (req.body?.modelIrd ?? updatedIrd?.modelIrd ?? "IRD").trim?.() ?? "IRD",
+        nombre: normalizeStr(req.body?.nombreIrd ?? updatedIrd?.nombreIrd) || "IRD",
+        marca: normalizeStr(req.body?.marcaIrd ?? updatedIrd?.marcaIrd) || "IRD",
+        modelo: normalizeStr(req.body?.modelIrd ?? updatedIrd?.modelIrd) || "IRD",
         tipoNombre: tipoIrdId,
-        ip_gestion: typeof ipGestion === "string" ? ipGestion.trim() : null,
+        ip_gestion: normalizeStr(req.body?.ipAdminIrd ?? updatedIrd?.ipAdminIrd) || null,
+        // irdRef NO lo cambies: debe seguir apuntando al mismo IRD
       };
 
-      // si existe equipo por irdRef -> update
-      // si no existe -> lo crea (upsert) por irdRef
-      updatedEquipo = await Equipo.findOneAndUpdate(
-        { irdRef: updatedIrd._id },
-        { $set: payloadEquipo, $setOnInsert: { irdRef: updatedIrd._id } },
-        {
-          new: true,
-          upsert: true,
-          session,
-          setDefaultsOnInsert: true,
+      if (equipoId) {
+        updatedEquipo = await Equipo.findByIdAndUpdate(
+          equipoId,
+          { $set: payloadEquipo, $setOnInsert: { irdRef: updatedIrd._id } },
+          { new: true, session }
+        );
+
+        // si el equipoId no existe:
+        if (!updatedEquipo?._id) {
+          throw { status: 404, message: "Equipo no encontrado para el equipoId enviado." };
         }
-      );
+
+        // asegurar que quede referenciado al IRD correcto
+        if (!updatedEquipo.irdRef) {
+          updatedEquipo = await Equipo.findByIdAndUpdate(
+            equipoId,
+            { $set: { irdRef: updatedIrd._id } },
+            { new: true, session }
+          );
+        }
+      } else {
+        // Fallback seguro: buscar por irdRef (es único) y actualizar
+        updatedEquipo = await Equipo.findOneAndUpdate(
+          { irdRef: updatedIrd._id },
+          { $set: payloadEquipo },
+          { new: true, session }
+        );
+      }
     });
 
     const equipoPopulado = await populateEquipoById(updatedEquipo?._id);
@@ -241,7 +241,7 @@ module.exports.deleteIrd = async (req, res) => {
         { session }
       );
 
-      // Alternativa (si prefieres borrar el equipo del IRD):
+      // Alternativa (si prefieres borrar el equipo asociado):
       // await Equipo.deleteMany({ irdRef: deleted._id }, { session });
     });
 
