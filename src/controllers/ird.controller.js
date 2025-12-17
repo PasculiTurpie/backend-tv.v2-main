@@ -61,7 +61,7 @@ module.exports.createIrd = async (req, res) => {
 
   try {
     let createdIrd = null;
-    let createdEquipo = null;
+    let equipoFinal = null;
 
     await session.withTransaction(async () => {
       // 1) Crear IRD
@@ -72,45 +72,111 @@ module.exports.createIrd = async (req, res) => {
         throw { status: 500, message: "No se pudo crear IRD" };
       }
 
-      // 2) Obtener/crear TipoEquipo "ird"
+      // 2) TipoEquipo "ird"
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
       if (!tipoIrdId) {
         throw { status: 500, message: "No se pudo resolver/crear el TipoEquipo 'ird'." };
       }
 
-      // 3) Crear Equipo NUEVO con mapeo desde IRD y irdRef = IRD._id
+      const ipGestion = String(createdIrd.ipAdminIrd ?? "").trim();
+
       const payloadEquipo = {
         nombre: String(createdIrd.nombreIrd ?? "").trim(),
         marca: String(createdIrd.marcaIrd ?? "").trim(),
         modelo: String(createdIrd.modelIrd ?? "").trim(),
         tipoNombre: tipoIrdId,
-        ip_gestion: String(createdIrd.ipAdminIrd ?? "").trim() || null,
-
-        // ✅ referencia al IRD (esto es lo que pides)
-        irdRef: createdIrd._id,
+        ip_gestion: ipGestion || null,
+        irdRef: createdIrd._id, // ✅ IRD._id aquí
       };
 
-      const [equipoDoc] = await Equipo.create([payloadEquipo], { session });
-      createdEquipo = equipoDoc;
+      // 3) Intentar crear Equipo
+      try {
+        const [equipoDoc] = await Equipo.create([payloadEquipo], { session });
+        equipoFinal = equipoDoc;
+      } catch (e) {
+        // 3.1) Si falló por duplicado de ip_gestion, buscar el equipo existente
+        const isDup = e?.code === 11000 && e?.keyPattern?.ip_gestion;
+        if (!isDup) throw e;
 
-      if (!createdEquipo?._id) {
-        throw { status: 500, message: "No se pudo crear el Equipo asociado al IRD" };
+        const existente = await Equipo.findOne({ ip_gestion: ipGestion }).session(session);
+
+        if (!existente?._id) {
+          throw {
+            status: 409,
+            message: `Ya existe un Equipo con ip_gestion ${ipGestion}, pero no se pudo recuperar.`,
+          };
+        }
+
+        // 🔒 Regla de seguridad:
+        // Si ese equipo NO es IRD y/o ya está ocupado, NO lo sobreescribimos.
+        // (Evita amarrar un Titan u otro equipo al IRD por accidente)
+        const yaTieneIrd = Boolean(existente.irdRef);
+        const esTipoIrd = String(existente.tipoNombre) === String(tipoIrdId);
+
+        if (yaTieneIrd && String(existente.irdRef) !== String(createdIrd._id)) {
+          throw {
+            status: 409,
+            message: `La ip_gestion ${ipGestion} ya pertenece a otro Equipo que ya tiene irdRef asociado.`,
+          };
+        }
+
+        if (!esTipoIrd && yaTieneIrd) {
+          throw {
+            status: 409,
+            message: `La ip_gestion ${ipGestion} pertenece a un Equipo de otro tipo (no IRD).`,
+          };
+        }
+
+        // ✅ Si es seguro, lo “convertimos”/sincronizamos a Equipo IRD y le seteamos irdRef
+        existente.nombre = payloadEquipo.nombre;
+        existente.marca = payloadEquipo.marca;
+        existente.modelo = payloadEquipo.modelo;
+        existente.tipoNombre = tipoIrdId;
+        existente.irdRef = createdIrd._id;
+
+        await existente.save({ session });
+        equipoFinal = existente;
+      }
+
+      // 4) Validación dura: debe quedar irdRef = IRD._id
+      const check = await Equipo.findOne({ irdRef: createdIrd._id })
+        .select("_id irdRef ip_gestion tipoNombre")
+        .session(session);
+
+      if (!check?._id) {
+        throw {
+          status: 500,
+          message: "Se creó el IRD pero no quedó el Equipo con irdRef (rollback esperado).",
+        };
       }
     });
 
-    const equipoPopulado = await populateEquipoById(createdEquipo?._id);
+    const equipoPopulado = await Equipo.findById(equipoFinal._id)
+      .populate("tipoNombre")
+      .populate("irdRef")
+      .lean();
 
     return res.status(201).json({
       ird: createdIrd,
-      equipo: equipoPopulado || null,
+      equipo: equipoPopulado,
       equipoInfo: {
         created: true,
-        reason: "Equipo IRD creado automáticamente con irdRef = IRD._id.",
+        reason: "Equipo IRD creado o asociado (por ip_gestion) con irdRef = IRD._id.",
         tipoEquipo: "ird",
       },
     });
   } catch (error) {
     console.error("createIrd error:", error);
+
+    // Si falla, opcional: si el IRD quedó creado fuera de rollback (Mongo sin replica set),
+    // lo borramos manualmente para no dejar basura:
+    try {
+      if (createdIrd?._id) {
+        await IRD.deleteOne({ _id: createdIrd._id });
+      }
+    } catch (cleanupErr) {
+      console.warn("cleanup IRD failed:", cleanupErr);
+    }
 
     if (error?.status) return res.status(error.status).json({ message: error.message });
 
@@ -128,6 +194,7 @@ module.exports.createIrd = async (req, res) => {
     session.endSession();
   }
 };
+
 
 
 
