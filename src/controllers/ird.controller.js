@@ -6,34 +6,23 @@ const TipoEquipo = require("../models/tipoEquipo");
 
 const normalizeLower = (s) => String(s ?? "").trim().toLowerCase();
 
-async function getOrCreateTipoEquipoIdByName(name, { session } = {}) {
+async function findTipoEquipoIdByName(name, { session } = {}) {
   const tipoLower = normalizeLower(name);
-  if (!tipoLower) throw { status: 400, message: "TipoEquipo inválido" };
+  if (!tipoLower) return null;
 
+  // ✅ Solo buscar, NO crear
   const found = await TipoEquipo.findOne({ tipoNombreLower: tipoLower })
     .select("_id")
     .lean()
     .session(session);
 
-  if (found?._id) return found._id;
-
-  const created = await TipoEquipo.create(
-    [
-      {
-        tipoNombre: String(name).trim(),
-        tipoNombreLower: tipoLower,
-      },
-    ],
-    { session }
-  );
-
-  return created?.[0]?._id;
+  return found?._id ?? null;
 }
 
 async function populateEquipoById(equipoId) {
   if (!equipoId) return null;
   return Equipo.findById(equipoId)
-    .populate("tipoNombre") // ✅ aquí viene tipoNombre.tipoNombre
+    .populate("tipoNombre")
     .populate("irdRef")
     .lean();
 }
@@ -54,6 +43,11 @@ module.exports.createIrd = async (req, res) => {
   try {
     let createdIrd = null;
     let createdEquipo = null;
+    let equipoInfo = {
+      created: false,
+      reason: "",
+      tipoEquipo: "ird",
+    };
 
     await session.withTransaction(async () => {
       // 1) Crear IRD
@@ -64,10 +58,14 @@ module.exports.createIrd = async (req, res) => {
         throw { status: 500, message: "No se pudo crear IRD" };
       }
 
-      // 2) Resolver TipoEquipo "ird"
-      const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
+      // 2) Buscar TipoEquipo "ird" (NO crear)
+      const tipoIrdId = await findTipoEquipoIdByName("ird", { session });
+
       if (!tipoIrdId) {
-        throw { status: 500, message: "No se pudo resolver TipoEquipo 'ird'" };
+        equipoInfo.created = false;
+        equipoInfo.reason =
+          "No existe el TipoEquipo 'ird'. No se creó el Equipo asociado.";
+        return; // ✅ se mantiene IRD creado, pero no creamos equipo
       }
 
       // 3) Crear Equipo asociado al IRD
@@ -82,14 +80,18 @@ module.exports.createIrd = async (req, res) => {
 
       const [equipoDoc] = await Equipo.create([payloadEquipo], { session });
       createdEquipo = equipoDoc;
+
+      equipoInfo.created = true;
+      equipoInfo.reason = "Equipo asociado creado automáticamente.";
     });
 
-    // ✅ devolver equipo populado (fuera de la transacción)
+    // ✅ devolver equipo populado si existe
     const equipoPopulado = await populateEquipoById(createdEquipo?._id);
 
     return res.status(201).json({
       ird: createdIrd,
-      equipo: equipoPopulado ?? createdEquipo,
+      equipo: equipoPopulado || null,
+      equipoInfo, // ✅ para que el front muestre el motivo si no se creó
     });
   } catch (error) {
     console.error("createIrd error:", error);
@@ -107,7 +109,7 @@ module.exports.createIrd = async (req, res) => {
       });
     }
 
-    return res.status(500).json({ message: "Error al crear IRD (y su Equipo)" });
+    return res.status(500).json({ message: "Error al crear IRD" });
   } finally {
     session.endSession();
   }
