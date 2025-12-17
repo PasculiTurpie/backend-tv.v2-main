@@ -72,20 +72,22 @@ module.exports.createIrd = async (req, res) => {
         throw { status: 500, message: "No se pudo crear IRD" };
       }
 
-      // 2) Asegurar TipoEquipo "ird" (buscar o crear)
+      // 2) Asegurar TipoEquipo "ird"
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
       if (!tipoIrdId) {
         throw { status: 500, message: "No se pudo resolver/crear el TipoEquipo 'ird'." };
       }
 
-      // 3) ✅ Crear SIEMPRE un Equipo NUEVO (NO upsert por ip_gestion)
+      // 3) Crear Equipo asociado y guardar referencia al IRD
       const payloadEquipo = {
-        nombre: normalizeStr(req.body?.nombreIrd) || "IRD",
-        marca: normalizeStr(req.body?.marcaIrd) || "IRD",
-        modelo: normalizeStr(req.body?.modelIrd) || "IRD",
+        nombre: String(req.body?.nombreIrd ?? "").trim(),
+        marca: String(req.body?.marcaIrd ?? "").trim(),
+        modelo: String(req.body?.modelIrd ?? "").trim(),
         tipoNombre: tipoIrdId,
-        ip_gestion: normalizeStr(req.body?.ipAdminIrd) || null, // puede ser null si lo permites
-        irdRef: createdIrd._id, // ✅ referencia al IRD
+        ip_gestion: String(req.body?.ipAdminIrd ?? "").trim() || null,
+
+        // ✅ AQUÍ: el ObjectId del IRD queda en irdRef
+        irdRef: createdIrd._id,
       };
 
       const [equipoDoc] = await Equipo.create([payloadEquipo], { session });
@@ -96,23 +98,19 @@ module.exports.createIrd = async (req, res) => {
       }
     });
 
-    const equipoPopulado = await populateEquipoById(createdEquipo?._id);
+    const equipoPopulado = await Equipo.findById(createdEquipo._id)
+      .populate("tipoNombre")
+      .populate("irdRef")
+      .lean();
 
     return res.status(201).json({
       ird: createdIrd,
-      equipo: equipoPopulado || null,
-      equipoInfo: {
-        created: Boolean(createdEquipo?._id),
-        reason: "Equipo asociado creado automáticamente (nuevo _id).",
-        tipoEquipo: "ird",
-      },
+      equipo: equipoPopulado,
     });
   } catch (error) {
     console.error("createIrd error:", error);
 
-    if (error?.status) {
-      return res.status(error.status).json({ message: error.message });
-    }
+    if (error?.status) return res.status(error.status).json({ message: error.message });
 
     if (error?.code === 11000) {
       const field = Object.keys(error.keyValue || {})[0];
@@ -128,6 +126,7 @@ module.exports.createIrd = async (req, res) => {
     session.endSession();
   }
 };
+
 
 module.exports.updateIrd = async (req, res) => {
   const session = await mongoose.startSession();
