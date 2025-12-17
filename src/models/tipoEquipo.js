@@ -1,25 +1,20 @@
 const mongoose = require("mongoose");
 
-const SchemaTipoEquipos = new mongoose.Schema(
+const TipoEquipoSchema = new mongoose.Schema(
   {
-    tipoNombre: {
-      type: String,
-      required: true,
-      unique: true,     // ✔ evita duplicados
-      trim: true,       // ✔ elimina espacios
-      lowercase: true,  // ✔ SIEMPRE en minúsculas
-    },
+    tipoNombre: { type: String, required: true, trim: true },
+    tipoNombreLower: { type: String, required: true, trim: true, unique: true },
   },
-  {
-    timestamps: true,
-    versionKey: false,
-  }
+  { timestamps: true }
 );
 
-// ✔ asegura que el índice único exista realmente en MongoDB
-SchemaTipoEquipos.index({ tipoNombre: 1 }, { unique: true });
+// Asegura que tipoNombreLower siempre exista aunque alguien cree directo por Mongo
+TipoEquipoSchema.pre("validate", function (next) {
+  if (this.tipoNombre) {
+    this.tipoNombre = String(this.tipoNombre).trim();
+    this.tipoNombreLower = String(this.tipoNombre).trim().toLowerCase();
+  }
+  next();
+});
 
-const TipoEquipo = mongoose.model("TipoEquipo", SchemaTipoEquipos);
-
-module.exports = TipoEquipo;
-
+module.exports = mongoose.model("TipoEquipo", TipoEquipoSchema);

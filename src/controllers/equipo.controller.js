@@ -6,60 +6,66 @@ const Satellite = require("../models/satellite.model");
 
 const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value));
 
-async function resolveTipoEquipoId(rawValue) {
+function normalizeTipoNombre(raw) {
+  return String(raw ?? "").trim().toLowerCase();
+}
+
+async function resolveTipoEquipoId(rawValue, { allowCreate = false } = {}) {
   const value = rawValue ?? null;
+
   if (value === null || value === undefined || value === "") {
     throw { status: 400, message: "El tipo de equipo es obligatorio" };
   }
 
+  // Caso 1: viene un ObjectId
   if (isValidObjectId(value)) {
     const exists = await TipoEquipo.exists({ _id: value });
-    if (!exists) {
-      throw { status: 404, message: "Tipo de equipo no encontrado" };
-    }
+    if (!exists) throw { status: 404, message: "Tipo de equipo no encontrado" };
     return value;
   }
 
-  const nombre = String(value).trim();
-  if (!nombre) {
-    throw { status: 400, message: "El tipo de equipo es obligatorio" };
-  }
+  // Caso 2: viene un nombre (string)
+  const nombreLower = normalizeTipoNombre(value);
+  if (!nombreLower) throw { status: 400, message: "El tipo de equipo es obligatorio" };
 
-  const existing = await TipoEquipo.findOne({ tipoNombre: nombre })
+  const existing = await TipoEquipo.findOne({ tipoNombreLower: nombreLower })
     .select("_id")
     .lean();
 
-  if (existing) {
-    return existing._id;
+  if (existing) return existing._id;
+
+  // ✅ Importante: en UPDATE NO creamos
+  if (!allowCreate) {
+    throw {
+      status: 400,
+      message: "Tipo de equipo inválido: debes enviar el ID del tipo existente",
+    };
   }
 
-  const created = await TipoEquipo.create({ tipoNombre: nombre });
+  // En CREATE sí permitimos crear (si quieres)
+  const created = await TipoEquipo.create({
+    tipoNombre: String(value).trim(),
+    tipoNombreLower: nombreLower,
+  });
+
   return created._id;
 }
 
 async function resolveIrdRef(rawValue) {
   if (rawValue === undefined) return undefined;
   if (rawValue === null || rawValue === "") return null;
-  if (!isValidObjectId(rawValue)) {
-    throw { status: 400, message: "Identificador de IRD inválido" };
-  }
+  if (!isValidObjectId(rawValue)) throw { status: 400, message: "Identificador de IRD inválido" };
   const exists = await Ird.exists({ _id: rawValue });
-  if (!exists) {
-    throw { status: 404, message: "IRD no encontrado" };
-  }
+  if (!exists) throw { status: 404, message: "IRD no encontrado" };
   return rawValue;
 }
 
 async function resolveSatelliteRef(rawValue) {
   if (rawValue === undefined) return undefined;
   if (rawValue === null || rawValue === "") return null;
-  if (!isValidObjectId(rawValue)) {
-    throw { status: 400, message: "Identificador de satélite inválido" };
-  }
+  if (!isValidObjectId(rawValue)) throw { status: 400, message: "Identificador de satélite inválido" };
   const exists = await Satellite.exists({ _id: rawValue });
-  if (!exists) {
-    throw { status: 404, message: "Satélite no encontrado" };
-  }
+  if (!exists) throw { status: 404, message: "Satélite no encontrado" };
   return rawValue;
 }
 
@@ -68,8 +74,7 @@ function mapIncomingPayload(payload = {}) {
     nombre: payload.nombre ?? payload.nombreEquipo ?? null,
     marca: payload.marca ?? payload.marcaEquipo ?? null,
     modelo: payload.modelo ?? payload.modelEquipo ?? null,
-    tipoNombre:
-      payload.tipoNombre ?? payload.tipoNombreId ?? payload.tipo ?? payload.tipo_equipo,
+    tipoNombre: payload.tipoNombre ?? payload.tipoNombreId ?? payload.tipo ?? payload.tipo_equipo,
     ip_gestion: payload.ip_gestion ?? payload.ipAdminEquipo ?? null,
     irdRef: payload.irdRef ?? null,
     satelliteRef: payload.satelliteRef ?? payload.satellite ?? null,
@@ -93,7 +98,8 @@ module.exports.createEquipo = async (req, res) => {
   try {
     const payload = mapIncomingPayload(req.body);
 
-    payload.tipoNombre = await resolveTipoEquipoId(payload.tipoNombre);
+    // ✅ En create permitimos crear el tipo si llega nombre
+    payload.tipoNombre = await resolveTipoEquipoId(payload.tipoNombre, { allowCreate: true });
     payload.irdRef = await resolveIrdRef(payload.irdRef);
     payload.satelliteRef = await resolveSatelliteRef(payload.satelliteRef);
 
@@ -107,9 +113,8 @@ module.exports.createEquipo = async (req, res) => {
 
     return res.status(201).json(populated);
   } catch (error) {
-    if (error?.status) {
-      return res.status(error.status).json({ message: error.message });
-    }
+    if (error?.status) return res.status(error.status).json({ message: error.message });
+
     if (error?.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       const value = error.keyValue[field];
@@ -118,6 +123,7 @@ module.exports.createEquipo = async (req, res) => {
         detail: error.keyValue,
       });
     }
+
     console.error("Error al crear equipo:", error);
     return res.status(500).json({ message: "Error al crear equipo" });
   }
@@ -151,9 +157,7 @@ module.exports.getIdEquipo = async (req, res) => {
       })
       .lean();
 
-    if (!equipo) {
-      return res.status(404).json({ message: "Equipo no encontrado" });
-    }
+    if (!equipo) return res.status(404).json({ message: "Equipo no encontrado" });
 
     return res.json(equipo);
   } catch (error) {
@@ -166,8 +170,9 @@ module.exports.updateEquipo = async (req, res) => {
   try {
     const patch = mapIncomingPayload(req.body);
 
+    // ✅ En update NO permitimos crear tipo si llega string
     if (patch.tipoNombre !== undefined) {
-      patch.tipoNombre = await resolveTipoEquipoId(patch.tipoNombre);
+      patch.tipoNombre = await resolveTipoEquipoId(patch.tipoNombre, { allowCreate: false });
     }
     if (patch.irdRef !== undefined) {
       patch.irdRef = await resolveIrdRef(patch.irdRef);
@@ -185,23 +190,19 @@ module.exports.updateEquipo = async (req, res) => {
       runValidators: true,
     });
 
-    if (!updated) {
-      return res.status(404).json({ message: "Equipo no encontrado" });
-    }
+    if (!updated) return res.status(404).json({ message: "Equipo no encontrado" });
 
     const populated = await populateEquipo(updated);
     return res.json(populated);
   } catch (error) {
-    if (error?.status) {
-      return res.status(error.status).json({ message: error.message });
-    }
+    if (error?.status) return res.status(error.status).json({ message: error.message });
+
     if (error?.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       const value = error.keyValue[field];
-      return res
-        .status(409)
-        .json({ message: `Ya existe un equipo con ${field}: "${value}"` });
+      return res.status(409).json({ message: `Ya existe un equipo con ${field}: "${value}"` });
     }
+
     console.error("updateEquipo error:", error);
     return res.status(500).json({ message: "Error al actualizar equipo" });
   }
@@ -210,9 +211,7 @@ module.exports.updateEquipo = async (req, res) => {
 module.exports.deleteEquipo = async (req, res) => {
   try {
     const deleted = await Equipo.findByIdAndDelete(req.params.id).lean();
-    if (!deleted) {
-      return res.status(404).json({ message: "Equipo no encontrado" });
-    }
+    if (!deleted) return res.status(404).json({ message: "Equipo no encontrado" });
     return res.json({ message: "Equipo eliminado correctamente" });
   } catch (error) {
     console.error("deleteEquipo error:", error);

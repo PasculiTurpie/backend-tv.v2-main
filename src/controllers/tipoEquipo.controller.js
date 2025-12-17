@@ -1,5 +1,8 @@
 const TipoEquipo = require("../models/tipoEquipo");
 
+const normalize = (s) => String(s ?? "").trim();
+const normalizeLower = (s) => normalize(s).toLowerCase();
+
 const sanitize = (doc) => {
   if (!doc) return null;
   const plain = doc.toObject ? doc.toObject() : doc;
@@ -13,7 +16,7 @@ const sanitize = (doc) => {
 
 module.exports.getTipoEquipo = async (_req, res) => {
   try {
-    const tipoEquipo = await TipoEquipo.find().sort({ tipoNombre: 1 }).lean();
+    const tipoEquipo = await TipoEquipo.find().sort({ tipoNombreLower: 1 }).lean();
     return res.json(tipoEquipo.map(sanitize));
   } catch (error) {
     console.error("Error al obtener tipos de equipo:", error);
@@ -24,9 +27,7 @@ module.exports.getTipoEquipo = async (_req, res) => {
 module.exports.getTipoEquipoById = async (req, res) => {
   try {
     const tipoEquipo = await TipoEquipo.findById(req.params.id).lean();
-    if (!tipoEquipo) {
-      return res.status(404).json({ message: "Tipo de equipo no encontrado" });
-    }
+    if (!tipoEquipo) return res.status(404).json({ message: "Tipo de equipo no encontrado" });
     return res.json(sanitize(tipoEquipo));
   } catch (error) {
     console.error("Error al obtener tipo de equipo:", error);
@@ -36,18 +37,21 @@ module.exports.getTipoEquipoById = async (req, res) => {
 
 module.exports.createTipoEquipo = async (req, res) => {
   try {
-    const tipoEquipo = new TipoEquipo(req.body);
-    await tipoEquipo.save();
-    return res.status(201).json(sanitize(tipoEquipo));
+    const tipoNombre = normalize(req.body?.tipoNombre);
+    if (!tipoNombre) return res.status(400).json({ message: "tipoNombre es obligatorio" });
+
+    const doc = await TipoEquipo.create({
+      tipoNombre,
+      tipoNombreLower: normalizeLower(tipoNombre),
+    });
+
+    return res.status(201).json(sanitize(doc));
   } catch (error) {
-    if (error.code === 11000) {
-      const field = Object.keys(error.keyValue)[0];
-      const value = error.keyValue[field];
+    if (error?.code === 11000) {
       return res.status(409).json({
-        message: `Ya existe un tipo de equipo con "${value}" en el campo "${field}".`,
+        message: `Ya existe un tipo de equipo con ese nombre.`,
       });
     }
-
     console.error("Error inesperado al crear tipo de equipo:", error);
     return res.status(500).json({ message: "Error al crear tipo de equipo" });
   }
@@ -55,22 +59,28 @@ module.exports.createTipoEquipo = async (req, res) => {
 
 module.exports.updateTipoEquipo = async (req, res) => {
   try {
-    const updated = await TipoEquipo.findByIdAndUpdate(req.params.id, req.body, {
+    const update = { ...req.body };
+
+    if (update.tipoNombre !== undefined) {
+      const tipoNombre = normalize(update.tipoNombre);
+      if (!tipoNombre) return res.status(400).json({ message: "tipoNombre es obligatorio" });
+
+      update.tipoNombre = tipoNombre;
+      update.tipoNombreLower = normalizeLower(tipoNombre);
+    }
+
+    const updated = await TipoEquipo.findByIdAndUpdate(req.params.id, update, {
       new: true,
       runValidators: true,
     }).lean();
 
-    if (!updated) {
-      return res.status(404).json({ message: "Tipo de equipo no encontrado" });
-    }
+    if (!updated) return res.status(404).json({ message: "Tipo de equipo no encontrado" });
 
     return res.json(sanitize(updated));
   } catch (error) {
-    if (error.code === 11000) {
-      const field = Object.keys(error.keyValue)[0];
-      const value = error.keyValue[field];
+    if (error?.code === 11000) {
       return res.status(409).json({
-        message: `Ya existe un tipo de equipo con "${value}" en el campo "${field}".`,
+        message: `Ya existe un tipo de equipo con ese nombre.`,
       });
     }
     console.error("Error al actualizar tipo de equipo:", error);
@@ -81,9 +91,7 @@ module.exports.updateTipoEquipo = async (req, res) => {
 module.exports.deleteTipoEquipo = async (req, res) => {
   try {
     const deleted = await TipoEquipo.findByIdAndDelete(req.params.id).lean();
-    if (!deleted) {
-      return res.status(404).json({ message: "Tipo de equipo no encontrado" });
-    }
+    if (!deleted) return res.status(404).json({ message: "Tipo de equipo no encontrado" });
     return res.json({ message: "Tipo de equipo eliminado correctamente" });
   } catch (error) {
     console.error("Error al eliminar tipo de equipo:", error);
