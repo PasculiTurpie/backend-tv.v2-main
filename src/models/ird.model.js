@@ -1,3 +1,4 @@
+// models/ird.model.js
 const mongoose = require("mongoose");
 
 const IrdSchema = new mongoose.Schema(
@@ -7,102 +8,52 @@ const IrdSchema = new mongoose.Schema(
       default: "https://i.ibb.co/pvW06r6K/ird-motorola.png",
       trim: true,
     },
+
     nombreIrd: {
       type: String,
       unique: true,
+      required: true,
       trim: true,
     },
+
     ipAdminIrd: {
       type: String,
       unique: true,
+      required: true,
       trim: true,
     },
-    marcaIrd: {
-      type: String,
-      trim: true,
-    },
-    modelIrd: {
-      type: String,
-      trim: true,
-    },
-    versionIrd: {
-      type: String,
-      trim: true,
-    },
-    uaIrd: {
-      type: String,
-      trim: true,
-    },
-    tidReceptor: {
-      type: String,
-      trim: true,
-    },
-    typeReceptor: {
-      type: String,
-      trim: true,
-    },
-    feqReceptor: {
-      type: String,
-      trim: true,
-    },
-    symbolRateIrd: {
-      type: String,
-      trim: true,
-    },
-    fecReceptorIrd: {
-      type: String,
-      trim: true,
-    },
-    modulationReceptorIrd: {
-      type: String,
-      trim: true,
-    },
-    rellOfReceptor: {
-      type: String,
-      trim: true,
-    },
-    nidReceptor: {
-      type: String,
-      trim: true,
-    },
-    cvirtualReceptor: {
-      type: String,
-      trim: true,
-    },
-    vctReceptor: {
-      type: String,
-      trim: true,
-    },
-    outputReceptor: {
-      type: String,
-      trim: true,
-    },
-    multicastReceptor: {
-      type: String,
-      trim: true,
-    },
-    ipVideoMulticast: {
-      type: String,
-      trim: true,
-    },
-    locationRow: {
-      type: String,
-      trim: true,
-    },
-    locationCol: {
-      type: String,
-      trim: true,
-    },
-    swAdmin: {
-      type: String,
-      trim: true,
-    },
-    portSw: {
-      type: String,
-      trim: true,
-    },
+
+    marcaIrd: { type: String, trim: true, default: "" },
+    modelIrd: { type: String, trim: true, default: "" },
+    versionIrd: { type: String, trim: true, default: "" },
+    uaIrd: { type: String, trim: true, default: "" },
+
+    tidReceptor: { type: String, trim: true, default: "" },
+    typeReceptor: { type: String, trim: true, default: "" },
+    feqReceptor: { type: String, trim: true, default: "" },
+    symbolRateIrd: { type: String, trim: true, default: "" },
+    fecReceptorIrd: { type: String, trim: true, default: "" },
+    modulationReceptorIrd: { type: String, trim: true, default: "" },
+    rellOfReceptor: { type: String, trim: true, default: "" },
+    nidReceptor: { type: String, trim: true, default: "" },
+    cvirtualReceptor: { type: String, trim: true, default: "" },
+    vctReceptor: { type: String, trim: true, default: "" },
+    outputReceptor: { type: String, trim: true, default: "" },
+    multicastReceptor: { type: String, trim: true, default: "" },
+    ipVideoMulticast: { type: String, trim: true, default: "" },
+
+    locationRow: { type: String, trim: true, default: "" },
+    locationCol: { type: String, trim: true, default: "" },
+
+    swAdmin: { type: String, trim: true, default: "" },
+    portSw: { type: String, trim: true, default: "" },
   },
   { timestamps: true, versionKey: false }
+);
+
+IrdSchema.index(
+  { nombreIrd: 1 },
+  { unique: true, collation: { locale: "es", strength: 2 } } // evita "IRD1" vs "ird1"
 );
 
 const Ird = mongoose.model("Ird", IrdSchema);

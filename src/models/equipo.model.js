@@ -19,7 +19,11 @@ const SchemaEquipos = new mongoose.Schema(
       default: null,
     },
 
-    satelliteRef: { type: mongoose.Schema.Types.ObjectId, ref: "Satellite", default: null },
+    satelliteRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Satellite",
+      default: null,
+    },
 
     // ✅ 1 IRD = 1 Equipo (evita duplicados por reintentos)
     irdRef: {
@@ -36,7 +40,10 @@ const SchemaEquipos = new mongoose.Schema(
 // ✅ Evita duplicar IPs reales, permite múltiples null
 SchemaEquipos.index(
   { ip_gestion: 1 },
-  { unique: true, partialFilterExpression: { ip_gestion: { $type: "string" } } }
+  {
+    unique: true,
+    partialFilterExpression: { ip_gestion: { $type: "string" } },
+  }
 );
 
 const Equipo = mongoose.model("Equipo", SchemaEquipos);
