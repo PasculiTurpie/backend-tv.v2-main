@@ -72,21 +72,21 @@ module.exports.createIrd = async (req, res) => {
         throw { status: 500, message: "No se pudo crear IRD" };
       }
 
-      // 2) Asegurar TipoEquipo "ird"
+      // 2) Obtener/crear TipoEquipo "ird" => ObjectId para Equipo.tipoNombre
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
       if (!tipoIrdId) {
         throw { status: 500, message: "No se pudo resolver/crear el TipoEquipo 'ird'." };
       }
 
-      // 3) Crear Equipo asociado y guardar referencia al IRD
+      // 3) Crear Equipo con datos provenientes del IRD (mapeo solicitado)
       const payloadEquipo = {
-        nombre: String(req.body?.nombreIrd ?? "").trim(),
-        marca: String(req.body?.marcaIrd ?? "").trim(),
-        modelo: String(req.body?.modelIrd ?? "").trim(),
-        tipoNombre: tipoIrdId,
-        ip_gestion: String(req.body?.ipAdminIrd ?? "").trim() || null,
+        nombre: String(createdIrd.nombreIrd ?? req.body?.nombreIrd ?? "").trim(),
+        marca: String(createdIrd.marcaIrd ?? req.body?.marcaIrd ?? "").trim(),
+        modelo: String(createdIrd.modelIrd ?? req.body?.modelIrd ?? "").trim(),
+        tipoNombre: tipoIrdId, // ✅ ObjectId de TipoEquipo "ird"
+        ip_gestion: String(createdIrd.ipAdminIrd ?? req.body?.ipAdminIrd ?? "").trim() || null,
 
-        // ✅ AQUÍ: el ObjectId del IRD queda en irdRef
+        // ✅ _id del IRD guardado en irdRef
         irdRef: createdIrd._id,
       };
 
@@ -98,14 +98,16 @@ module.exports.createIrd = async (req, res) => {
       }
     });
 
-    const equipoPopulado = await Equipo.findById(createdEquipo._id)
-      .populate("tipoNombre")
-      .populate("irdRef")
-      .lean();
+    const equipoPopulado = await populateEquipoById(createdEquipo?._id);
 
     return res.status(201).json({
       ird: createdIrd,
-      equipo: equipoPopulado,
+      equipo: equipoPopulado || null,
+      equipoInfo: {
+        created: true,
+        reason: "Equipo asociado creado automáticamente desde datos del IRD.",
+        tipoEquipo: "ird",
+      },
     });
   } catch (error) {
     console.error("createIrd error:", error);
@@ -126,6 +128,7 @@ module.exports.createIrd = async (req, res) => {
     session.endSession();
   }
 };
+
 
 
 module.exports.updateIrd = async (req, res) => {
