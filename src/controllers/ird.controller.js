@@ -18,10 +18,6 @@ function isTransactionNotSupported(err) {
   );
 }
 
-/**
- * Ejecuta con transacción si el deployment lo soporta.
- * Si NO lo soporta, ejecuta sin transacción (igual deja el sistema consistente).
- */
 async function runWithOptionalTransaction(work) {
   const session = await mongoose.startSession();
   try {
@@ -32,8 +28,9 @@ async function runWithOptionalTransaction(work) {
       });
       return result;
     } catch (err) {
-      // 👇 fallback para Mongo sin replica set
+      console.error("[IRD][TX] Error en transacción:", err?.message || err);
       if (isTransactionNotSupported(err)) {
+        console.warn("[IRD][TX] Mongo NO soporta transacciones. Ejecutando SIN session...");
         return await work({ session: null, useSession: false });
       }
       throw err;
@@ -47,15 +44,24 @@ async function getOrCreateTipoEquipoIdByName(name, { session } = {}) {
   const tipoLower = normalizeLower(name);
   if (!tipoLower) return null;
 
+  console.log("[IRD][TipoEquipo] Buscando:", { name, tipoLower });
+
   const q = TipoEquipo.findOne({ tipoNombreLower: tipoLower }).select("_id").lean();
   if (session) q.session(session);
 
   const found = await q;
+  console.log("[IRD][TipoEquipo] Found:", found);
+
   if (found?._id) return found._id;
 
   const payload = { tipoNombre: String(name).trim(), tipoNombreLower: tipoLower };
+  console.log("[IRD][TipoEquipo] Creando TipoEquipo:", payload);
+
   const createdArr = await TipoEquipo.create([payload], session ? { session } : undefined);
-  return createdArr?.[0]?._id ?? null;
+  const created = createdArr?.[0];
+  console.log("[IRD][TipoEquipo] Created:", created?._id);
+
+  return created?._id ?? null;
 }
 
 async function populateEquipoById(equipoId) {
@@ -66,10 +72,11 @@ async function populateEquipoById(equipoId) {
 // ===== GETS =====
 module.exports.getIrd = async (_req, res) => {
   try {
+    console.log("[IRD][GET] listando IRDs...");
     const ird = await IRD.find().sort({ ipAdminIrd: 1 }).lean();
     res.json(ird);
   } catch (error) {
-    console.error("getIrd error:", error);
+    console.error("[IRD][GET] getIrd error:", error);
     res.status(500).json({ message: "Error al obtener ird`s" });
   }
 };
@@ -77,10 +84,11 @@ module.exports.getIrd = async (_req, res) => {
 module.exports.getIdIrd = async (req, res) => {
   try {
     const id = req.params.id;
+    console.log("[IRD][GET] getIdIrd:", id);
     const ird = await IRD.findById(id).lean();
     res.json(ird);
   } catch (error) {
-    console.error("getIdIrd error:", error);
+    console.error("[IRD][GET] getIdIrd error:", error);
     res.status(500).json({ message: "Error al obtener ird" });
   }
 };
@@ -90,19 +98,28 @@ module.exports.createIrd = async (req, res) => {
   let createdIrdId = null;
 
   try {
+    console.log("[IRD][CREATE] Body recibido:", req.body);
+
     const out = await runWithOptionalTransaction(async ({ session }) => {
       // 1) crear IRD
+      console.log("[IRD][CREATE] Creando IRD...");
       const created = await IRD.create([req.body], session ? { session } : undefined);
       const createdIrd = created?.[0];
-      if (!createdIrd?._id) throw { status: 500, message: "No se pudo crear IRD" };
 
+      console.log("[IRD][CREATE] IRD creado:", createdIrd?._id);
+
+      if (!createdIrd?._id) throw { status: 500, message: "No se pudo crear IRD" };
       createdIrdId = createdIrd._id;
 
       // 2) TipoEquipo "ird"
+      console.log("[IRD][CREATE] Resolviendo TipoEquipo 'ird'...");
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
+
+      console.log("[IRD][CREATE] tipoIrdId:", tipoIrdId);
+
       if (!tipoIrdId) throw { status: 500, message: "No se pudo resolver/crear TipoEquipo 'ird'." };
 
-      // 3) crear Equipo asociado (NUEVO) con irdRef = IRD._id
+      // 3) crear Equipo asociado con irdRef = IRD._id
       const payloadEquipo = {
         nombre: normalizeStr(createdIrd.nombreIrd),
         marca: normalizeStr(createdIrd.marcaIrd),
@@ -112,8 +129,13 @@ module.exports.createIrd = async (req, res) => {
         irdRef: createdIrd._id,
       };
 
+      console.log("[IRD][CREATE] Creando Equipo asociado:", payloadEquipo);
+
       const eqCreated = await Equipo.create([payloadEquipo], session ? { session } : undefined);
       const equipo = eqCreated?.[0];
+
+      console.log("[IRD][CREATE] Equipo creado:", equipo?._id);
+
       if (!equipo?._id) throw { status: 500, message: "No se pudo crear el Equipo asociado." };
 
       const equipoPopulado = await populateEquipoById(equipo._id);
@@ -131,18 +153,20 @@ module.exports.createIrd = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("createIrd error:", error);
+    console.error("[IRD][CREATE] Error:", error);
 
-    // ✅ cleanup si IRD alcanzó a crearse (cuando no hay transacciones reales)
+    // cleanup si IRD alcanzó a crearse en modo SIN transacciones reales
     try {
       if (createdIrdId) {
+        console.warn("[IRD][CREATE] Cleanup: borrando IRD creado por error:", createdIrdId);
         await IRD.deleteOne({ _id: createdIrdId });
       }
     } catch (cleanupErr) {
-      console.warn("cleanup IRD failed:", cleanupErr);
+      console.warn("[IRD][CREATE] cleanup IRD failed:", cleanupErr);
     }
 
     if (error?.code === 11000) {
+      console.error("[IRD][CREATE] Duplicate key:", error?.keyValue);
       const field = Object.keys(error.keyValue || {})[0];
       const value = error.keyValue?.[field];
       return res.status(409).json({
@@ -152,7 +176,11 @@ module.exports.createIrd = async (req, res) => {
     }
 
     if (error?.status) return res.status(error.status).json({ message: error.message });
-    return res.status(500).json({ message: "Error al crear IRD" });
+
+    return res.status(500).json({
+      message: "Error al crear IRD",
+      detail: error?.message || error,
+    });
   }
 };
 
@@ -160,12 +188,16 @@ module.exports.createIrd = async (req, res) => {
 module.exports.updateIrd = async (req, res) => {
   try {
     const id = req.params.id;
+    console.log("[IRD][UPDATE] id:", id);
+    console.log("[IRD][UPDATE] body:", req.body);
 
     const out = await runWithOptionalTransaction(async ({ session }) => {
       // 1) actualizar IRD
       const qIrd = IRD.findByIdAndUpdate(id, req.body, { new: true });
       if (session) qIrd.session(session);
       const updatedIrd = await qIrd.lean();
+
+      console.log("[IRD][UPDATE] updatedIrd:", updatedIrd?._id);
 
       if (!updatedIrd?._id) throw { status: 404, message: "IRD no encontrado" };
 
@@ -182,39 +214,38 @@ module.exports.updateIrd = async (req, res) => {
         ip_gestion: normalizeStr(updatedIrd.ipAdminIrd) || null,
       };
 
+      console.log("[IRD][UPDATE] payloadEquipo:", payloadEquipo);
+
       const qEq = Equipo.findOneAndUpdate(
         { irdRef: updatedIrd._id },
         { $set: payloadEquipo },
         { new: true }
       );
       if (session) qEq.session(session);
-      const updatedEquipo = await qEq;
+      let updatedEquipo = await qEq;
 
-      // Si NO existe equipo aún (por errores históricos), lo crea
-      let finalEquipo = updatedEquipo;
-      if (!finalEquipo?._id) {
+      console.log("[IRD][UPDATE] updatedEquipo:", updatedEquipo?._id);
+
+      if (!updatedEquipo?._id) {
+        console.warn("[IRD][UPDATE] No existía equipo por irdRef, creando uno nuevo...");
         const createdArr = await Equipo.create(
-          [
-            {
-              ...payloadEquipo,
-              irdRef: updatedIrd._id,
-            },
-          ],
+          [{ ...payloadEquipo, irdRef: updatedIrd._id }],
           session ? { session } : undefined
         );
-        finalEquipo = createdArr?.[0] ?? null;
+        updatedEquipo = createdArr?.[0] ?? null;
       }
 
-      const equipoPopulado = await populateEquipoById(finalEquipo?._id);
+      const equipoPopulado = await populateEquipoById(updatedEquipo?._id);
 
       return { updatedIrd, equipoPopulado };
     });
 
     return res.json({ ird: out.updatedIrd, equipo: out.equipoPopulado || null });
   } catch (error) {
-    console.error("updateIrd error:", error);
+    console.error("[IRD][UPDATE] Error:", error);
 
     if (error?.code === 11000) {
+      console.error("[IRD][UPDATE] Duplicate key:", error?.keyValue);
       const field = Object.keys(error.keyValue || {})[0];
       const value = error.keyValue?.[field];
       return res.status(409).json({
@@ -224,7 +255,11 @@ module.exports.updateIrd = async (req, res) => {
     }
 
     if (error?.status) return res.status(error.status).json({ message: error.message });
-    return res.status(500).json({ message: "Error al actualizar Ird" });
+
+    return res.status(500).json({
+      message: "Error al actualizar Ird",
+      detail: error?.message || error,
+    });
   }
 };
 
@@ -232,27 +267,33 @@ module.exports.updateIrd = async (req, res) => {
 module.exports.deleteIrd = async (req, res) => {
   try {
     const id = req.params.id;
+    console.log("[IRD][DELETE] id:", id);
 
     await runWithOptionalTransaction(async ({ session }) => {
-      // 1) borrar IRD
       const qDel = IRD.findByIdAndDelete(id);
       if (session) qDel.session(session);
       const deleted = await qDel;
 
+      console.log("[IRD][DELETE] deleted:", deleted?._id);
+
       if (!deleted?._id) throw { status: 404, message: "IRD no encontrado" };
 
-      // 2) borrar o limpiar equipo asociado (recomendado: borrar)
-      // Si quieres solo limpiar, cambia a updateMany y set irdRef:null (pero ojo: irdRef unique+sparse igual permite null)
       const qEqDel = Equipo.deleteMany({ irdRef: deleted._id });
       if (session) qEqDel.session(session);
-      await qEqDel;
+      const delResult = await qEqDel;
+
+      console.log("[IRD][DELETE] equipos borrados:", delResult);
     });
 
     return res.json({ message: "Ird eliminado" });
   } catch (error) {
-    console.error("deleteIrd error:", error);
+    console.error("[IRD][DELETE] Error:", error);
 
     if (error?.status) return res.status(error.status).json({ message: error.message });
-    return res.status(500).json({ message: "Error al eliminar ird" });
+
+    return res.status(500).json({
+      message: "Error al eliminar ird",
+      detail: error?.message || error,
+    });
   }
 };
