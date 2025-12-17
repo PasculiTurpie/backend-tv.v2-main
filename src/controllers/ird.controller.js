@@ -7,34 +7,63 @@ const TipoEquipo = require("../models/tipoEquipo");
 const normalizeLower = (s) => String(s ?? "").trim().toLowerCase();
 const normalizeStr = (s) => String(s ?? "").trim();
 
+function isTransactionNotSupported(err) {
+  const msg = String(err?.message || err || "");
+  return (
+    msg.includes("Transaction numbers are only allowed") ||
+    msg.includes("replica set") ||
+    msg.includes("mongos") ||
+    msg.includes("does not support transactions") ||
+    msg.includes("Retryable writes are not supported")
+  );
+}
+
+/**
+ * Ejecuta con transacción si el deployment lo soporta.
+ * Si NO lo soporta, ejecuta sin transacción (igual deja el sistema consistente).
+ */
+async function runWithOptionalTransaction(work) {
+  const session = await mongoose.startSession();
+  try {
+    try {
+      let result;
+      await session.withTransaction(async () => {
+        result = await work({ session, useSession: true });
+      });
+      return result;
+    } catch (err) {
+      // 👇 fallback para Mongo sin replica set
+      if (isTransactionNotSupported(err)) {
+        return await work({ session: null, useSession: false });
+      }
+      throw err;
+    }
+  } finally {
+    session.endSession();
+  }
+}
+
 async function getOrCreateTipoEquipoIdByName(name, { session } = {}) {
   const tipoLower = normalizeLower(name);
   if (!tipoLower) return null;
 
-  const found = await TipoEquipo.findOne({ tipoNombreLower: tipoLower })
-    .select("_id")
-    .lean()
-    .session(session);
+  const q = TipoEquipo.findOne({ tipoNombreLower: tipoLower }).select("_id").lean();
+  if (session) q.session(session);
 
+  const found = await q;
   if (found?._id) return found._id;
 
-  const payload = {
-    tipoNombre: String(name).trim(),
-    tipoNombreLower: tipoLower,
-  };
-
-  const [created] = await TipoEquipo.create([payload], { session });
-  return created?._id ?? null;
+  const payload = { tipoNombre: String(name).trim(), tipoNombreLower: tipoLower };
+  const createdArr = await TipoEquipo.create([payload], session ? { session } : undefined);
+  return createdArr?.[0]?._id ?? null;
 }
 
 async function populateEquipoById(equipoId) {
   if (!equipoId) return null;
-  return Equipo.findById(equipoId)
-    .populate("tipoNombre")
-    .populate("irdRef")
-    .lean();
+  return Equipo.findById(equipoId).populate("tipoNombre").populate("irdRef").lean();
 }
 
+// ===== GETS =====
 module.exports.getIrd = async (_req, res) => {
   try {
     const ird = await IRD.find().sort({ ipAdminIrd: 1 }).lean();
@@ -56,130 +85,63 @@ module.exports.getIdIrd = async (req, res) => {
   }
 };
 
+// ===== CREATE =====
 module.exports.createIrd = async (req, res) => {
-  const session = await mongoose.startSession();
+  let createdIrdId = null;
 
   try {
-    let createdIrd = null;
-    let equipoFinal = null;
+    const out = await runWithOptionalTransaction(async ({ session }) => {
+      // 1) crear IRD
+      const created = await IRD.create([req.body], session ? { session } : undefined);
+      const createdIrd = created?.[0];
+      if (!createdIrd?._id) throw { status: 500, message: "No se pudo crear IRD" };
 
-    await session.withTransaction(async () => {
-      // 1) Crear IRD
-      const [irdDoc] = await IRD.create([req.body], { session });
-      createdIrd = irdDoc;
-
-      if (!createdIrd?._id) {
-        throw { status: 500, message: "No se pudo crear IRD" };
-      }
+      createdIrdId = createdIrd._id;
 
       // 2) TipoEquipo "ird"
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
-      if (!tipoIrdId) {
-        throw { status: 500, message: "No se pudo resolver/crear el TipoEquipo 'ird'." };
-      }
+      if (!tipoIrdId) throw { status: 500, message: "No se pudo resolver/crear TipoEquipo 'ird'." };
 
-      const ipGestion = String(createdIrd.ipAdminIrd ?? "").trim();
-
+      // 3) crear Equipo asociado (NUEVO) con irdRef = IRD._id
       const payloadEquipo = {
-        nombre: String(createdIrd.nombreIrd ?? "").trim(),
-        marca: String(createdIrd.marcaIrd ?? "").trim(),
-        modelo: String(createdIrd.modelIrd ?? "").trim(),
+        nombre: normalizeStr(createdIrd.nombreIrd),
+        marca: normalizeStr(createdIrd.marcaIrd),
+        modelo: normalizeStr(createdIrd.modelIrd),
         tipoNombre: tipoIrdId,
-        ip_gestion: ipGestion || null,
-        irdRef: createdIrd._id, // ✅ IRD._id aquí
+        ip_gestion: normalizeStr(createdIrd.ipAdminIrd) || null,
+        irdRef: createdIrd._id,
       };
 
-      // 3) Intentar crear Equipo
-      try {
-        const [equipoDoc] = await Equipo.create([payloadEquipo], { session });
-        equipoFinal = equipoDoc;
-      } catch (e) {
-        // 3.1) Si falló por duplicado de ip_gestion, buscar el equipo existente
-        const isDup = e?.code === 11000 && e?.keyPattern?.ip_gestion;
-        if (!isDup) throw e;
+      const eqCreated = await Equipo.create([payloadEquipo], session ? { session } : undefined);
+      const equipo = eqCreated?.[0];
+      if (!equipo?._id) throw { status: 500, message: "No se pudo crear el Equipo asociado." };
 
-        const existente = await Equipo.findOne({ ip_gestion: ipGestion }).session(session);
+      const equipoPopulado = await populateEquipoById(equipo._id);
 
-        if (!existente?._id) {
-          throw {
-            status: 409,
-            message: `Ya existe un Equipo con ip_gestion ${ipGestion}, pero no se pudo recuperar.`,
-          };
-        }
-
-        // 🔒 Regla de seguridad:
-        // Si ese equipo NO es IRD y/o ya está ocupado, NO lo sobreescribimos.
-        // (Evita amarrar un Titan u otro equipo al IRD por accidente)
-        const yaTieneIrd = Boolean(existente.irdRef);
-        const esTipoIrd = String(existente.tipoNombre) === String(tipoIrdId);
-
-        if (yaTieneIrd && String(existente.irdRef) !== String(createdIrd._id)) {
-          throw {
-            status: 409,
-            message: `La ip_gestion ${ipGestion} ya pertenece a otro Equipo que ya tiene irdRef asociado.`,
-          };
-        }
-
-        if (!esTipoIrd && yaTieneIrd) {
-          throw {
-            status: 409,
-            message: `La ip_gestion ${ipGestion} pertenece a un Equipo de otro tipo (no IRD).`,
-          };
-        }
-
-        // ✅ Si es seguro, lo “convertimos”/sincronizamos a Equipo IRD y le seteamos irdRef
-        existente.nombre = payloadEquipo.nombre;
-        existente.marca = payloadEquipo.marca;
-        existente.modelo = payloadEquipo.modelo;
-        existente.tipoNombre = tipoIrdId;
-        existente.irdRef = createdIrd._id;
-
-        await existente.save({ session });
-        equipoFinal = existente;
-      }
-
-      // 4) Validación dura: debe quedar irdRef = IRD._id
-      const check = await Equipo.findOne({ irdRef: createdIrd._id })
-        .select("_id irdRef ip_gestion tipoNombre")
-        .session(session);
-
-      if (!check?._id) {
-        throw {
-          status: 500,
-          message: "Se creó el IRD pero no quedó el Equipo con irdRef (rollback esperado).",
-        };
-      }
+      return { createdIrd, equipoPopulado };
     });
 
-    const equipoPopulado = await Equipo.findById(equipoFinal._id)
-      .populate("tipoNombre")
-      .populate("irdRef")
-      .lean();
-
     return res.status(201).json({
-      ird: createdIrd,
-      equipo: equipoPopulado,
+      ird: out.createdIrd,
+      equipo: out.equipoPopulado,
       equipoInfo: {
         created: true,
-        reason: "Equipo IRD creado o asociado (por ip_gestion) con irdRef = IRD._id.",
+        reason: "Equipo IRD creado automáticamente con irdRef = IRD._id",
         tipoEquipo: "ird",
       },
     });
   } catch (error) {
     console.error("createIrd error:", error);
 
-    // Si falla, opcional: si el IRD quedó creado fuera de rollback (Mongo sin replica set),
-    // lo borramos manualmente para no dejar basura:
+    // ✅ cleanup si IRD alcanzó a crearse (cuando no hay transacciones reales)
     try {
-      if (createdIrd?._id) {
-        await IRD.deleteOne({ _id: createdIrd._id });
+      if (createdIrdId) {
+        await IRD.deleteOne({ _id: createdIrdId });
       }
     } catch (cleanupErr) {
       console.warn("cleanup IRD failed:", cleanupErr);
     }
 
-    if (error?.status) return res.status(error.status).json({ message: error.message });
-
     if (error?.code === 11000) {
       const field = Object.keys(error.keyValue || {})[0];
       const value = error.keyValue?.[field];
@@ -189,93 +151,69 @@ module.exports.createIrd = async (req, res) => {
       });
     }
 
+    if (error?.status) return res.status(error.status).json({ message: error.message });
     return res.status(500).json({ message: "Error al crear IRD" });
-  } finally {
-    session.endSession();
   }
 };
 
-
-
-
-
+// ===== UPDATE =====
 module.exports.updateIrd = async (req, res) => {
-  const session = await mongoose.startSession();
-
   try {
-    let updatedIrd = null;
-    let updatedEquipo = null;
+    const id = req.params.id;
 
-    await session.withTransaction(async () => {
-      const id = req.params.id;
-
+    const out = await runWithOptionalTransaction(async ({ session }) => {
       // 1) actualizar IRD
-      updatedIrd = await IRD.findByIdAndUpdate(id, req.body, { new: true, session }).lean();
-      if (!updatedIrd?._id) {
-        throw { status: 404, message: "IRD no encontrado" };
-      }
+      const qIrd = IRD.findByIdAndUpdate(id, req.body, { new: true });
+      if (session) qIrd.session(session);
+      const updatedIrd = await qIrd.lean();
 
-      // 2) asegurar TipoEquipo "ird"
+      if (!updatedIrd?._id) throw { status: 404, message: "IRD no encontrado" };
+
+      // 2) TipoEquipo "ird"
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
-      if (!tipoIrdId) {
-        throw { status: 500, message: "No se pudo resolver/crear el TipoEquipo 'ird'." };
-      }
+      if (!tipoIrdId) throw { status: 500, message: "No se pudo resolver/crear TipoEquipo 'ird'." };
 
-      // 3) ✅ actualizar Equipo por ID si viene (regla que tú quieres)
-      const equipoId = req.body?.equipoId || req.body?.equipoRef || null;
-
+      // 3) actualizar equipo asociado (por irdRef)
       const payloadEquipo = {
-        nombre: normalizeStr(req.body?.nombreIrd ?? updatedIrd?.nombreIrd) || "IRD",
-        marca: normalizeStr(req.body?.marcaIrd ?? updatedIrd?.marcaIrd) || "IRD",
-        modelo: normalizeStr(req.body?.modelIrd ?? updatedIrd?.modelIrd) || "IRD",
+        nombre: normalizeStr(updatedIrd.nombreIrd) || "IRD",
+        marca: normalizeStr(updatedIrd.marcaIrd) || "IRD",
+        modelo: normalizeStr(updatedIrd.modelIrd) || "IRD",
         tipoNombre: tipoIrdId,
-        ip_gestion: normalizeStr(req.body?.ipAdminIrd ?? updatedIrd?.ipAdminIrd) || null,
-        // irdRef NO lo cambies: debe seguir apuntando al mismo IRD
+        ip_gestion: normalizeStr(updatedIrd.ipAdminIrd) || null,
       };
 
-      if (equipoId) {
-        updatedEquipo = await Equipo.findByIdAndUpdate(
-          equipoId,
-          { $set: payloadEquipo, $setOnInsert: { irdRef: updatedIrd._id } },
-          { new: true, session }
-        );
+      const qEq = Equipo.findOneAndUpdate(
+        { irdRef: updatedIrd._id },
+        { $set: payloadEquipo },
+        { new: true }
+      );
+      if (session) qEq.session(session);
+      const updatedEquipo = await qEq;
 
-        // si el equipoId no existe:
-        if (!updatedEquipo?._id) {
-          throw { status: 404, message: "Equipo no encontrado para el equipoId enviado." };
-        }
-
-        // asegurar que quede referenciado al IRD correcto
-        if (!updatedEquipo.irdRef) {
-          updatedEquipo = await Equipo.findByIdAndUpdate(
-            equipoId,
-            { $set: { irdRef: updatedIrd._id } },
-            { new: true, session }
-          );
-        }
-      } else {
-        // Fallback seguro: buscar por irdRef (es único) y actualizar
-        updatedEquipo = await Equipo.findOneAndUpdate(
-          { irdRef: updatedIrd._id },
-          { $set: payloadEquipo },
-          { new: true, session }
+      // Si NO existe equipo aún (por errores históricos), lo crea
+      let finalEquipo = updatedEquipo;
+      if (!finalEquipo?._id) {
+        const createdArr = await Equipo.create(
+          [
+            {
+              ...payloadEquipo,
+              irdRef: updatedIrd._id,
+            },
+          ],
+          session ? { session } : undefined
         );
+        finalEquipo = createdArr?.[0] ?? null;
       }
+
+      const equipoPopulado = await populateEquipoById(finalEquipo?._id);
+
+      return { updatedIrd, equipoPopulado };
     });
 
-    const equipoPopulado = await populateEquipoById(updatedEquipo?._id);
-
-    return res.json({
-      ird: updatedIrd,
-      equipo: equipoPopulado || null,
-    });
+    return res.json({ ird: out.updatedIrd, equipo: out.equipoPopulado || null });
   } catch (error) {
     console.error("updateIrd error:", error);
 
-    if (error?.status) {
-      return res.status(error.status).json({ message: error.message });
-    }
-
     if (error?.code === 11000) {
       const field = Object.keys(error.keyValue || {})[0];
       const value = error.keyValue?.[field];
@@ -285,46 +223,36 @@ module.exports.updateIrd = async (req, res) => {
       });
     }
 
+    if (error?.status) return res.status(error.status).json({ message: error.message });
     return res.status(500).json({ message: "Error al actualizar Ird" });
-  } finally {
-    session.endSession();
   }
 };
 
+// ===== DELETE =====
 module.exports.deleteIrd = async (req, res) => {
-  const session = await mongoose.startSession();
-
   try {
-    await session.withTransaction(async () => {
-      const id = req.params.id;
+    const id = req.params.id;
 
+    await runWithOptionalTransaction(async ({ session }) => {
       // 1) borrar IRD
-      const deleted = await IRD.findByIdAndDelete(id, { session });
-      if (!deleted?._id) {
-        throw { status: 404, message: "IRD no encontrado" };
-      }
+      const qDel = IRD.findByIdAndDelete(id);
+      if (session) qDel.session(session);
+      const deleted = await qDel;
 
-      // 2) limpiar referencia en Equipo (recomendado)
-      await Equipo.updateMany(
-        { irdRef: deleted._id },
-        { $set: { irdRef: null } },
-        { session }
-      );
+      if (!deleted?._id) throw { status: 404, message: "IRD no encontrado" };
 
-      // Alternativa (si prefieres borrar el equipo asociado):
-      // await Equipo.deleteMany({ irdRef: deleted._id }, { session });
+      // 2) borrar o limpiar equipo asociado (recomendado: borrar)
+      // Si quieres solo limpiar, cambia a updateMany y set irdRef:null (pero ojo: irdRef unique+sparse igual permite null)
+      const qEqDel = Equipo.deleteMany({ irdRef: deleted._id });
+      if (session) qEqDel.session(session);
+      await qEqDel;
     });
 
     return res.json({ message: "Ird eliminado" });
   } catch (error) {
     console.error("deleteIrd error:", error);
 
-    if (error?.status) {
-      return res.status(error.status).json({ message: error.message });
-    }
-
+    if (error?.status) return res.status(error.status).json({ message: error.message });
     return res.status(500).json({ message: "Error al eliminar ird" });
-  } finally {
-    session.endSession();
   }
 };
