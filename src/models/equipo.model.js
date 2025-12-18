@@ -37,16 +37,8 @@ const SchemaEquipos = new mongoose.Schema(
   { timestamps: true, versionKey: false }
 );
 
-/**
- * ✅ Índices
- */
 
-// ✅ Índice normal (NO único) para búsquedas por IP (permite repetidos)
-SchemaEquipos.index({ ip_gestion: 1 });
 
-// ✅ Extra carga masiva: asegura 1 Equipo por cada IRD (evita duplicados por reintentos)
-// - Permite múltiples null
-// - Solo aplica unique cuando irdRef exista (ObjectId)
 SchemaEquipos.index(
   { irdRef: 1 },
   {
