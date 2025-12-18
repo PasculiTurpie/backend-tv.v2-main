@@ -14,6 +14,28 @@ const sanitize = (doc) => {
   };
 };
 
+// ✅ NUEVO: GET /tipo-equipo/by-name/:name
+module.exports.getTipoEquipoByName = async (req, res) => {
+  try {
+    const name = normalize(req.params?.name);
+    if (!name) return res.status(400).json({ message: "name es obligatorio" });
+
+    const lower = normalizeLower(name);
+
+    // preferimos el campo normalizado (rápido y consistente)
+    const tipo = await TipoEquipo.findOne({ tipoNombreLower: lower }).lean();
+
+    if (!tipo) {
+      return res.status(404).json({ message: "Tipo de equipo no encontrado" });
+    }
+
+    return res.json(sanitize(tipo));
+  } catch (error) {
+    console.error("Error al obtener tipo de equipo por nombre:", error);
+    return res.status(500).json({ message: "Error al obtener tipo de equipo" });
+  }
+};
+
 module.exports.getTipoEquipo = async (_req, res) => {
   try {
     const tipoEquipo = await TipoEquipo.find().sort({ tipoNombreLower: 1 }).lean();
