@@ -49,6 +49,17 @@ const IrdSchema = new mongoose.Schema(
   { timestamps: true, versionKey: false }
 );
 
+/* ===========================
+   ÍNDICE COMPUESTO ÚNICO
+   nombreIrd + ipAdminIrd
+   =========================== */
+IrdSchema.index(
+  { nombreIrd: 1, ipAdminIrd: 1 },
+  {
+    unique: true,
+    collation: { locale: "en", strength: 2 }, // case-insensitive
+  }
+);
 
 const Ird = mongoose.model("Ird", IrdSchema);
 module.exports = Ird;
