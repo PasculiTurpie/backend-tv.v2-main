@@ -1,21 +1,25 @@
 const XLSX = require("xlsx");
 const mongoose = require("mongoose");
-const Ird = require("../models/ird.model"); // Ajusta la ruta según tu estructura
-const Equipo = require("../models/equipo.model"); // Ajusta la ruta según tu estructura
-const TipoEquipo = require("../models/tipoEquipo"); // Ajusta la ruta según tu estructura
+const Ird = require("../models/ird.model");
+const Equipo = require("../models/equipo.model");
+const TipoEquipo = require("../models/tipoEquipo");
+
+// Normalizadores
+const normalizeLower = (s) => String(s ?? "").trim().toLowerCase();
+const normalizeStr = (s) => String(s ?? "").trim();
 
 // Función para limpiar y validar datos
 const cleanAndValidateData = (data) => {
   const cleaned = {};
 
-  // Campos requeridos con validaciones específicas
+  // Campos requeridos
   const requiredFields = ["nombreIrd", "ipAdminIrd"];
 
   for (const field of requiredFields) {
     if (!data[field] || String(data[field]).trim() === "") {
       throw new Error(`Campo requerido faltante: ${field}`);
     }
-    cleaned[field] = String(data[field]).trim();
+    cleaned[field] = normalizeStr(data[field]);
   }
 
   // Campos opcionales con limpieza
@@ -46,11 +50,11 @@ const cleanAndValidateData = (data) => {
 
   for (const field of optionalFields) {
     if (data[field] && String(data[field]).trim() !== "") {
-      cleaned[field] = String(data[field]).trim();
+      cleaned[field] = normalizeStr(data[field]);
     }
   }
 
-  // Validación de IP
+  // Validación de IP (simple)
   const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
   if (!ipRegex.test(cleaned.ipAdminIrd)) {
     throw new Error(`IP inválida: ${cleaned.ipAdminIrd}`);
@@ -59,22 +63,32 @@ const cleanAndValidateData = (data) => {
   return cleaned;
 };
 
-// Función para obtener o crear TipoEquipo para IRD
+// Función para obtener o crear TipoEquipo para IRD (robusta)
 const getOrCreateIrdTipoEquipo = async () => {
-  let tipoIrd = await TipoEquipo.findOne({ tipoNombre: "IRD" });
+  // Si tu TipoEquipo tiene tipoNombreLower, úsalo (más estable)
+  let tipoIrd = await TipoEquipo.findOne({ tipoNombreLower: "ird" }).lean();
 
   if (!tipoIrd) {
-    tipoIrd = new TipoEquipo({
+    // fallback por tipoNombre por si no existe lower
+    tipoIrd = await TipoEquipo.findOne({
+      tipoNombre: { $regex: /^ird$/i },
+    }).lean();
+  }
+
+  if (!tipoIrd) {
+    const payload = {
       tipoNombre: "IRD",
-      descripcion: "Integrated Receiver Decoder",
-    });
-    await tipoIrd.save();
+      tipoNombreLower: "ird",
+    };
+
+    const created = await TipoEquipo.create(payload);
+    return created;
   }
 
   return tipoIrd;
 };
 
-// Función principal de procesamiento
+// Procesamiento principal (PERMITE DUPLICADOS)
 const processIrdData = async (excelData) => {
   const results = {
     successful: [],
@@ -87,50 +101,37 @@ const processIrdData = async (excelData) => {
     },
   };
 
-  // Obtener el TipoEquipo para IRD
   const tipoIrd = await getOrCreateIrdTipoEquipo();
 
   for (let i = 0; i < excelData.length; i++) {
     const row = excelData[i];
-    const rowNumber = i + 2; // +2 porque Excel empieza en 1 y la primera fila son headers
+    const rowNumber = i + 2; // +2 por headers
 
     try {
       results.summary.totalProcessed++;
 
-      // Limpiar y validar datos
+      // Limpiar/validar
       const cleanData = cleanAndValidateData(row);
 
-      // Verificar si ya existe el IRD
-      const existingIrd = await Ird.findOne({
-        $or: [
-          { nombreIrd: cleanData.nombreIrd },
-          { ipAdminIrd: cleanData.ipAdminIrd },
-        ],
-      });
+      // ✅ PERMITE DUPLICADOS:
+      // - NO buscamos existingIrd
+      // - NO bloqueamos por nombreIrd o ipAdminIrd
 
-      if (existingIrd) {
-        throw new Error(
-          `IRD ya existe (nombre: ${cleanData.nombreIrd} o IP: ${cleanData.ipAdminIrd})`
-        );
-      }
-
-      // Crear el IRD
-      const newIrd = new Ird(cleanData);
-      await newIrd.save();
+      // Crear IRD siempre
+      const newIrd = await Ird.create(cleanData);
       results.summary.irdsCreated++;
 
-      // Crear el Equipo asociado
+      // Crear Equipo asociado siempre (duplicados permitidos)
       const equipoData = {
         nombre: cleanData.nombreIrd,
         marca: cleanData.marcaIrd || "N/A",
         modelo: cleanData.modelIrd || "N/A",
         tipoNombre: tipoIrd._id,
-        ip_gestion: cleanData.ipAdminIrd,
-        irdRef: newIrd._id,
+        ip_gestion: cleanData.ipAdminIrd || null,
+        irdRef: newIrd._id, // si quieres duplicar equipos incluso con mismo IRD, podrías setear null aquí
       };
 
-      const newEquipo = new Equipo(equipoData);
-      await newEquipo.save();
+      const newEquipo = await Equipo.create(equipoData);
       results.summary.equiposCreated++;
 
       results.successful.push({
@@ -163,12 +164,10 @@ const bulkCreateIrds = async (req, res) => {
       });
     }
 
-    // Leer el archivo Excel
     const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-    const sheetName = workbook.SheetNames[0]; // Primera hoja
+    const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
 
-    // Convertir a JSON
     const excelData = XLSX.utils.sheet_to_json(worksheet);
 
     if (excelData.length === 0) {
@@ -178,18 +177,16 @@ const bulkCreateIrds = async (req, res) => {
       });
     }
 
-    // Procesar datos
     const results = await processIrdData(excelData);
 
-    // Respuesta
-    res.json({
+    return res.json({
       success: true,
-      message: "Procesamiento completado",
+      message: "Procesamiento completado (duplicados permitidos)",
       data: results,
     });
   } catch (error) {
     console.error("Error en carga masiva de IRDs:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Error interno del servidor",
       error: error.message,
@@ -197,7 +194,7 @@ const bulkCreateIrds = async (req, res) => {
   }
 };
 
-// Función para validar el formato del Excel antes de procesar
+// Validación de formato
 const validateExcelFormat = async (req, res) => {
   try {
     if (!req.file) {
@@ -229,15 +226,13 @@ const validateExcelFormat = async (req, res) => {
 
     const headers = data[0] || [];
     const expectedHeaders = ["nombreIrd", "ipAdminIrd", "marcaIrd", "modelIrd"];
-    const missingHeaders = expectedHeaders.filter(
-      (header) => !headers.includes(header)
-    );
+    const missingHeaders = expectedHeaders.filter((h) => !headers.includes(h));
 
     if (missingHeaders.length > 0) {
       return res.status(400).json({
         success: false,
         message: "Formato de archivo incorrecto",
-        missingHeaders: missingHeaders,
+        missingHeaders,
         foundHeaders: headers,
       });
     }
@@ -248,8 +243,8 @@ const validateExcelFormat = async (req, res) => {
     return res.json({
       success: true,
       message: "Formato válido",
-      headers: headers,
-      preview: preview,
+      headers,
+      preview,
       totalRows: jsonData.length,
     });
   } catch (error) {
