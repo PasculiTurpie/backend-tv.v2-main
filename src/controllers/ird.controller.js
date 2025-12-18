@@ -44,22 +44,22 @@ async function getOrCreateTipoEquipoIdByName(name, { session } = {}) {
   const tipoLower = normalizeLower(name);
   if (!tipoLower) return null;
 
-  console.log("[IRD][TipoEquipo] Buscando:", { name, tipoLower });
+  
 
   const q = TipoEquipo.findOne({ tipoNombreLower: tipoLower }).select("_id").lean();
   if (session) q.session(session);
 
   const found = await q;
-  console.log("[IRD][TipoEquipo] Found:", found);
+  
 
   if (found?._id) return found._id;
 
   const payload = { tipoNombre: String(name).trim(), tipoNombreLower: tipoLower };
-  console.log("[IRD][TipoEquipo] Creando TipoEquipo:", payload);
+  
 
   const createdArr = await TipoEquipo.create([payload], session ? { session } : undefined);
   const created = createdArr?.[0];
-  console.log("[IRD][TipoEquipo] Created:", created?._id);
+  
 
   return created?._id ?? null;
 }
@@ -72,7 +72,7 @@ async function populateEquipoById(equipoId) {
 // ===== GETS =====
 module.exports.getIrd = async (_req, res) => {
   try {
-    console.log("[IRD][GET] listando IRDs...");
+    
     const ird = await IRD.find().sort({ ipAdminIrd: 1 }).lean();
     res.json(ird);
   } catch (error) {
@@ -84,7 +84,7 @@ module.exports.getIrd = async (_req, res) => {
 module.exports.getIdIrd = async (req, res) => {
   try {
     const id = req.params.id;
-    console.log("[IRD][GET] getIdIrd:", id);
+    
     const ird = await IRD.findById(id).lean();
     res.json(ird);
   } catch (error) {
@@ -98,24 +98,24 @@ module.exports.createIrd = async (req, res) => {
   let createdIrdId = null;
 
   try {
-    console.log("[IRD][CREATE] Body recibido:", req.body);
+    
 
     const out = await runWithOptionalTransaction(async ({ session }) => {
       // 1) crear IRD
-      console.log("[IRD][CREATE] Creando IRD...");
+      
       const created = await IRD.create([req.body], session ? { session } : undefined);
       const createdIrd = created?.[0];
 
-      console.log("[IRD][CREATE] IRD creado:", createdIrd?._id);
+      
 
       if (!createdIrd?._id) throw { status: 500, message: "No se pudo crear IRD" };
       createdIrdId = createdIrd._id;
 
       // 2) TipoEquipo "ird"
-      console.log("[IRD][CREATE] Resolviendo TipoEquipo 'ird'...");
+      
       const tipoIrdId = await getOrCreateTipoEquipoIdByName("ird", { session });
 
-      console.log("[IRD][CREATE] tipoIrdId:", tipoIrdId);
+      
 
       if (!tipoIrdId) throw { status: 500, message: "No se pudo resolver/crear TipoEquipo 'ird'." };
 
@@ -129,12 +129,12 @@ module.exports.createIrd = async (req, res) => {
         irdRef: createdIrd._id,
       };
 
-      console.log("[IRD][CREATE] Creando Equipo asociado:", payloadEquipo);
+      
 
       const eqCreated = await Equipo.create([payloadEquipo], session ? { session } : undefined);
       const equipo = eqCreated?.[0];
 
-      console.log("[IRD][CREATE] Equipo creado:", equipo?._id);
+      
 
       if (!equipo?._id) throw { status: 500, message: "No se pudo crear el Equipo asociado." };
 
@@ -188,8 +188,8 @@ module.exports.createIrd = async (req, res) => {
 module.exports.updateIrd = async (req, res) => {
   try {
     const id = req.params.id;
-    console.log("[IRD][UPDATE] id:", id);
-    console.log("[IRD][UPDATE] body:", req.body);
+    
+    
 
     const out = await runWithOptionalTransaction(async ({ session }) => {
       // 1) actualizar IRD
@@ -197,7 +197,7 @@ module.exports.updateIrd = async (req, res) => {
       if (session) qIrd.session(session);
       const updatedIrd = await qIrd.lean();
 
-      console.log("[IRD][UPDATE] updatedIrd:", updatedIrd?._id);
+      
 
       if (!updatedIrd?._id) throw { status: 404, message: "IRD no encontrado" };
 
@@ -214,7 +214,7 @@ module.exports.updateIrd = async (req, res) => {
         ip_gestion: normalizeStr(updatedIrd.ipAdminIrd) || null,
       };
 
-      console.log("[IRD][UPDATE] payloadEquipo:", payloadEquipo);
+      
 
       const qEq = Equipo.findOneAndUpdate(
         { irdRef: updatedIrd._id },
@@ -224,7 +224,7 @@ module.exports.updateIrd = async (req, res) => {
       if (session) qEq.session(session);
       let updatedEquipo = await qEq;
 
-      console.log("[IRD][UPDATE] updatedEquipo:", updatedEquipo?._id);
+      
 
       if (!updatedEquipo?._id) {
         console.warn("[IRD][UPDATE] No existía equipo por irdRef, creando uno nuevo...");
@@ -267,14 +267,14 @@ module.exports.updateIrd = async (req, res) => {
 module.exports.deleteIrd = async (req, res) => {
   try {
     const id = req.params.id;
-    console.log("[IRD][DELETE] id:", id);
+    
 
     await runWithOptionalTransaction(async ({ session }) => {
       const qDel = IRD.findByIdAndDelete(id);
       if (session) qDel.session(session);
       const deleted = await qDel;
 
-      console.log("[IRD][DELETE] deleted:", deleted?._id);
+      
 
       if (!deleted?._id) throw { status: 404, message: "IRD no encontrado" };
 
@@ -282,7 +282,7 @@ module.exports.deleteIrd = async (req, res) => {
       if (session) qEqDel.session(session);
       const delResult = await qEqDel;
 
-      console.log("[IRD][DELETE] equipos borrados:", delResult);
+      
     });
 
     return res.json({ message: "Ird eliminado" });
