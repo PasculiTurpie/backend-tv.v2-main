@@ -1,5 +1,4 @@
 const XLSX = require("xlsx");
-const mongoose = require("mongoose");
 const Ird = require("../models/ird.model");
 const Equipo = require("../models/equipo.model");
 const TipoEquipo = require("../models/tipoEquipo");
@@ -128,7 +127,7 @@ const processIrdData = async (excelData) => {
         modelo: cleanData.modelIrd || "N/A",
         tipoNombre: tipoIrd._id,
         ip_gestion: cleanData.ipAdminIrd || null,
-        irdRef: newIrd._id, // si quieres duplicar equipos incluso con mismo IRD, podrías setear null aquí
+        irdRef: newIrd._id,
       };
 
       const newEquipo = await Equipo.create(equipoData);
@@ -156,6 +155,10 @@ const processIrdData = async (excelData) => {
 
 // Controlador principal
 const bulkCreateIrds = async (req, res) => {
+  // ✅ Log infalible para confirmar que ESTE controller está corriendo
+  console.log("[BULK IRD] controller NUEVO cargado ✅", new Date().toISOString());
+  console.log("[BULK IRD] HIT URL:", req.originalUrl);
+
   try {
     if (!req.file) {
       return res.status(400).json({
