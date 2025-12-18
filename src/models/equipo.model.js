@@ -37,15 +37,5 @@ const SchemaEquipos = new mongoose.Schema(
   { timestamps: true, versionKey: false }
 );
 
-
-
-SchemaEquipos.index(
-  { irdRef: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { irdRef: { $type: "objectId" } },
-  }
-);
-
 const Equipo = mongoose.model("Equipo", SchemaEquipos);
 module.exports = Equipo;
