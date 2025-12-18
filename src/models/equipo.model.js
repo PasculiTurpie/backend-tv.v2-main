@@ -13,6 +13,7 @@ const SchemaEquipos = new mongoose.Schema(
       required: true,
     },
 
+    // ✅ ahora permite repetidos (para carga masiva)
     ip_gestion: {
       type: String,
       trim: true,
@@ -29,7 +30,6 @@ const SchemaEquipos = new mongoose.Schema(
     irdRef: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Ird",
-      unique: true,
       sparse: true,
       default: null,
     },
@@ -37,12 +37,21 @@ const SchemaEquipos = new mongoose.Schema(
   { timestamps: true, versionKey: false }
 );
 
-// ✅ Evita duplicar IPs reales, permite múltiples null
+/**
+ * ✅ Índices
+ */
+
+// ✅ Índice normal (NO único) para búsquedas por IP (permite repetidos)
+SchemaEquipos.index({ ip_gestion: 1 });
+
+// ✅ Extra carga masiva: asegura 1 Equipo por cada IRD (evita duplicados por reintentos)
+// - Permite múltiples null
+// - Solo aplica unique cuando irdRef exista (ObjectId)
 SchemaEquipos.index(
-  { ip_gestion: 1 },
+  { irdRef: 1 },
   {
     unique: true,
-    partialFilterExpression: { ip_gestion: { $type: "string" } },
+    partialFilterExpression: { irdRef: { $type: "objectId" } },
   }
 );
 
