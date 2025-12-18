@@ -96,8 +96,9 @@ async function populateEquipo(doc) {
 
 module.exports.createEquipo = async (req, res) => {
   try {
+    console.log("[createEquipo] req.body =", req.body);
     const payload = mapIncomingPayload(req.body);
-
+console.log("[createEquipo] mapped payload =", payload);
     // ✅ En create permitimos crear el tipo si llega nombre
     payload.tipoNombre = await resolveTipoEquipoId(payload.tipoNombre, { allowCreate: true });
     payload.irdRef = await resolveIrdRef(payload.irdRef);
