@@ -11,7 +11,6 @@ const IrdSchema = new mongoose.Schema(
 
     nombreIrd: {
       type: String,
-      unique: true,
       required: true,
       trim: true,
     },
@@ -50,10 +49,6 @@ const IrdSchema = new mongoose.Schema(
   { timestamps: true, versionKey: false }
 );
 
-IrdSchema.index(
-  { nombreIrd: 1 },
-  { unique: true, collation: { locale: "es", strength: 2 } } // evita "IRD1" vs "ird1"
-);
 
 const Ird = mongoose.model("Ird", IrdSchema);
 module.exports = Ird;
