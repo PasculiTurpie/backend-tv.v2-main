@@ -1,3 +1,4 @@
+// controllers/equipo.controller.js
 const mongoose = require("mongoose");
 const Equipo = require("../models/equipo.model");
 const TipoEquipo = require("../models/tipoEquipo");
@@ -63,26 +64,40 @@ async function resolveIrdRef(rawValue) {
 async function resolveSatelliteRef(rawValue) {
   if (rawValue === undefined) return undefined;
   if (rawValue === null || rawValue === "") return null;
-  if (!isValidObjectId(rawValue)) throw { status: 400, message: "Identificador de satélite inválido" };
+  if (!isValidObjectId(rawValue))
+    throw { status: 400, message: "Identificador de satélite inválido" };
   const exists = await Satellite.exists({ _id: rawValue });
   if (!exists) throw { status: 404, message: "Satélite no encontrado" };
   return rawValue;
 }
 
+/**
+ * ✅ Mapper corregido:
+ * - NO pisa irdRef/satelliteRef a null si no vienen en el payload.
+ * - Solo incluye esos campos cuando el cliente los envía explícitamente.
+ */
 function mapIncomingPayload(payload = {}) {
-  return {
+  const mapped = {
     nombre: payload.nombre ?? payload.nombreEquipo ?? null,
     marca: payload.marca ?? payload.marcaEquipo ?? null,
     modelo: payload.modelo ?? payload.modelEquipo ?? null,
     tipoNombre: payload.tipoNombre ?? payload.tipoNombreId ?? payload.tipo ?? payload.tipo_equipo,
     ip_gestion: payload.ip_gestion ?? payload.ipAdminEquipo ?? null,
-    irdRef: payload.irdRef ?? null,
-    satelliteRef: payload.satelliteRef ?? payload.satellite ?? null,
   };
+
+  // ✅ Solo setear si viene explícitamente (evita pisar valores existentes con null)
+  if ("irdRef" in payload) mapped.irdRef = payload.irdRef;
+
+  // satelliteRef puede venir como satelliteRef o como satellite
+  if ("satelliteRef" in payload) mapped.satelliteRef = payload.satelliteRef;
+  else if ("satellite" in payload) mapped.satelliteRef = payload.satellite;
+
+  return mapped;
 }
 
 async function populateEquipo(doc) {
   if (!doc) return null;
+
   const equipo = await Equipo.findById(doc._id)
     .populate("tipoNombre")
     .populate("irdRef")
@@ -91,18 +106,26 @@ async function populateEquipo(doc) {
       populate: [{ path: "satelliteType", select: "typePolarization" }],
     })
     .lean();
+
   return equipo;
 }
 
 module.exports.createEquipo = async (req, res) => {
   try {
     console.log("[createEquipo] req.body =", req.body);
+
     const payload = mapIncomingPayload(req.body);
-console.log("[createEquipo] mapped payload =", payload);
+    console.log("[createEquipo] mapped payload =", payload);
+
     // ✅ En create permitimos crear el tipo si llega nombre
     payload.tipoNombre = await resolveTipoEquipoId(payload.tipoNombre, { allowCreate: true });
-    payload.irdRef = await resolveIrdRef(payload.irdRef);
-    payload.satelliteRef = await resolveSatelliteRef(payload.satelliteRef);
+
+    if (payload.irdRef !== undefined) {
+      payload.irdRef = await resolveIrdRef(payload.irdRef);
+    }
+    if (payload.satelliteRef !== undefined) {
+      payload.satelliteRef = await resolveSatelliteRef(payload.satelliteRef);
+    }
 
     ["nombre", "marca", "modelo"].forEach((field) => {
       if (payload[field]) payload[field] = String(payload[field]).trim();
@@ -140,6 +163,7 @@ module.exports.getEquipo = async (_req, res) => {
         populate: [{ path: "satelliteType", select: "typePolarization" }],
       })
       .lean();
+
     return res.json(equipos);
   } catch (error) {
     console.error("getEquipo error:", error);
@@ -175,6 +199,8 @@ module.exports.updateEquipo = async (req, res) => {
     if (patch.tipoNombre !== undefined) {
       patch.tipoNombre = await resolveTipoEquipoId(patch.tipoNombre, { allowCreate: false });
     }
+
+    // ✅ Solo resolver si viene explícitamente (evita pisar si el cliente no lo manda)
     if (patch.irdRef !== undefined) {
       patch.irdRef = await resolveIrdRef(patch.irdRef);
     }
@@ -184,6 +210,11 @@ module.exports.updateEquipo = async (req, res) => {
 
     ["nombre", "marca", "modelo", "ip_gestion"].forEach((field) => {
       if (patch[field]) patch[field] = String(patch[field]).trim();
+    });
+
+    // ✅ Limpia keys undefined por seguridad
+    Object.keys(patch).forEach((k) => {
+      if (patch[k] === undefined) delete patch[k];
     });
 
     const updated = await Equipo.findByIdAndUpdate(req.params.id, patch, {
