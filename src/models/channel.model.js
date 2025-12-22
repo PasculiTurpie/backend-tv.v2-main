@@ -69,7 +69,7 @@ const EdgeDataSchema = new mongoose.Schema(
     labelEnd: { type: String, trim: true },
     direction: {
       type: String,
-      enum: ["ida", "vuelta", "bi"],
+      enum: ["ida", "vuelta", "bidireccional"],
       default: "ida",
     },
     // posición libre del label en el canvas
