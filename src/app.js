@@ -46,7 +46,7 @@ app.disable("x-powered-by");
 const defaultOrigins = [
   'https://localhost:5000',
   'https://signal-operacionestv.grupogtd.com',  
-  'https://172.19.14.135',
+  'https://172.25.18.37',
   'http://localhost:3000',
   'http://localhost:8000'
 ];
