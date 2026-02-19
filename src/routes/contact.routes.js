@@ -4,12 +4,12 @@ const ContactController = require("../controllers/contact.controller");
 const router = express.Router();
 
 router
-  .route("/contact")
+  .route("/contacts")
   .get(ContactController.getContact)
   .post(ContactController.createContact);
 
 router
-  .route("/contact/:id")
+  .route("/contacts/:id")
   .get(ContactController.getIdContact)
   .put(ContactController.updateContact)
   .delete(ContactController.deleteContact);
